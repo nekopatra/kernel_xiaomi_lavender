@@ -1,0 +1,76 @@
+name: TES KONTROL - R1 Polos (TANPA SUSFS)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+
+      - name: JANGAN apply patch - ini build kontrol
+        run: |
+          echo "Build ini sengaja TIDAK memakai ksu_susfs_transplant.patch"
+          echo "Tujuan: cek apakah branch R1 polos bisa boot di ROM crDroid"
+          grep -c "CONFIG_KSU" arch/arm64/configs/lavender_defconfig || echo "defconfig bersih (tidak ada KSU) - benar"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libelf-dev cpio \
+            build-essential zip wget curl git \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Download Clang toolchain
+        run: |
+          mkdir -p tc/zyc_clang
+          wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz -O tc/zyc_clang.tar.gz
+          tar -xf tc/zyc_clang.tar.gz -C tc/zyc_clang
+
+      - name: Build kernel
+        run: |
+          export PATH="$(pwd)/tc/zyc_clang/bin:$PATH"
+          export ARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          make O=out ARCH=arm64 lavender_defconfig
+          make O=out ARCH=arm64 CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            -j$(nproc) 2>&1 | tee build.log
+
+      - name: Check kernel image exists
+        run: |
+          if [ ! -f out/arch/arm64/boot/Image.gz ]; then
+            echo "BUILD GAGAL"
+            tail -n 300 build.log
+            exit 1
+          fi
+          echo "Build sukses"
+
+      - name: Package AnyKernel3 zip
+        run: |
+          git clone -q https://github.com/Sa-Sajjad/AnyKernel3 -b 4.19 AnyKernel3
+          cp out/arch/arm64/boot/Image.gz AnyKernel3/
+          cd AnyKernel3
+          sed -i 's/supported\.versions=.*/supported.versions=10-16/' anykernel.sh
+          ZIPNAME="TES-KONTROL-R1-POLOS-$(date +%Y%m%d-%H%M).zip"
+          zip -r9 "../$ZIPNAME" * -x .git README.md
+
+      - name: Upload build log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log-stock
+          path: build.log
+
+      - name: Upload zip tes kontrol
+        uses: actions/upload-artifact@v4
+        with:
+          name: TES-KONTROL-R1-polos
+          path: "*.zip"
